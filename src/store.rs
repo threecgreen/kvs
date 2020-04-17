@@ -2,7 +2,7 @@ use crate::{KvsError, KvsResult};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::{create_dir_all, remove_file, File, OpenOptions};
+use std::fs::{create_dir_all, read_dir, remove_file, File, OpenOptions};
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::path::PathBuf;
 
@@ -13,7 +13,7 @@ pub struct KvStore {
     /// Store position and file instead of deserialized values to save memory
     // TODO: Could be an optimization to store values for smaller data and
     // position for larger.
-    index: HashMap<String, u64>,
+    index: HashMap<String, LogPtr>,
     /// Number of opportunities for compaction, i.e. places where there are
     /// log entries that could be eliminated
     compactions: u16,
@@ -23,45 +23,58 @@ pub struct KvStore {
 
 /// Arbitrary limit before compacting. Could be made configurable or experiment
 /// to find good number
-static COMPACTION_LIMIT: u16 = 5;
+static COMPACTION_LIMIT: u16 = 50;
 
 impl KvStore {
     pub fn open(path: impl Into<PathBuf>) -> KvsResult<KvStore> {
         let path = path.into();
         create_dir_all(&path)?;
-        // `fold` files together
-        let mut log_file = KvStore::open_file(&path.join("kvs1.log"))?;
+        let log_file_nums = KvStore::sorted_file_nums(&path)?;
 
         // Build index
         let mut index = HashMap::new();
         let mut compactions = 0u16;
-        loop {
-            let last_pos = KvStore::current_pos(&mut log_file)?;
-            if let Ok(op) = bincode::deserialize_from(&log_file) {
-                match op {
-                    Op::Set { key, .. } => {
-                        if let Some(_) = index.insert(key, last_pos) {
-                            // `key` previously existed in `index`. This is an
-                            // opportunity for compaction
-                            compactions += 1;
-                        }
+        let monotonic = if log_file_nums.is_empty() {
+            1
+        } else {
+            // `fold` files together
+            for file_num in &log_file_nums {
+                let mut log_file = KvStore::open_file(&path.join(format!("{}.log", file_num)))?;
+                loop {
+                    let pos = KvStore::current_pos(&mut log_file)?;
+                    if let Ok(op) = bincode::deserialize_from(&log_file) {
+                        match op {
+                            Op::Set { key, .. } => {
+                                if let Some(_) = index.insert(
+                                    key,
+                                    LogPtr {
+                                        file_num: file_num.to_owned(),
+                                        pos,
+                                    },
+                                ) {
+                                    // `key` previously existed in `index`. This is an
+                                    // opportunity for compaction
+                                    compactions += 1;
+                                }
+                            }
+                            Op::Rm { key } => {
+                                index.remove(&key);
+                                compactions += 1;
+                            }
+                        };
+                    } else {
+                        break;
                     }
-                    Op::Rm { key } => {
-                        index.remove(&key);
-                        compactions += 1;
-                    }
-                };
-            } else {
-                break;
+                }
             }
-        }
-        // TODO: compact here?
+            log_file_nums.last().unwrap().to_owned()
+        };
         Ok(KvStore {
+            log_file: KvStore::open_file(&path.join(format!("{}.log", monotonic)))?,
             path,
-            log_file,
             index,
             compactions,
-            monotonic: 1,
+            monotonic,
         })
     }
 
@@ -69,6 +82,7 @@ impl KvStore {
         // Compaction
         if self.index.contains_key(&key) {
             self.compactions += 1;
+            dbg!(&key, &value, &self.compactions);
             self.compact_maybe()?;
         }
         // Log
@@ -78,15 +92,22 @@ impl KvStore {
         };
         let pos = self.log_file.seek(SeekFrom::End(0))?;
         let writer = BufWriter::new(&self.log_file);
+        dbg!(&writer, &op);
         bincode::serialize_into(writer, &op)?;
         // Set
-        self.index.insert(key, pos);
+        self.index.insert(
+            key,
+            LogPtr {
+                file_num: self.monotonic,
+                pos,
+            },
+        );
         Ok(())
     }
 
     pub fn get(&mut self, key: String) -> KvsResult<Option<String>> {
         match self.index.get(&key) {
-            Some(pos) => KvStore::value_at_pos(&self.log_file, *pos).map(Some),
+            Some(log_ptr) => KvStore::value_at_pos(&self.log_file, log_ptr.pos).map(Some),
             None => Ok(None),
         }
     }
@@ -102,6 +123,7 @@ impl KvStore {
         // Log
         let op = Op::Rm { key: key.clone() };
         let writer = BufWriter::new(&self.log_file);
+        dbg!(&writer, &op);
         bincode::serialize_into(writer, &op)?;
         // Remove
         self.index.remove(&key);
@@ -119,12 +141,24 @@ impl KvStore {
     /// Forces compaction. Rewrites log, eliminating unnecessary logs, i.e.
     /// `Op::Rm`s and `Op::Set`s that are set again later.
     pub fn compact(&mut self) -> KvsResult<()> {
-        let new_log = File::open(format!("kvs{}.log", self.monotonic + 1))?;
-        for (key, pos) in &self.index {
+        dbg!(&self.monotonic);
+        let new_log = KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
+        for (key, log_ptr) in &mut self.index {
+            dbg!(&key, &log_ptr);
             // Even if we error out writing these, the data will not be
             // corrupted
-            let value = KvStore::value_at_pos(&self.log_file, *pos)?;
+            let value = if log_ptr.file_num == self.monotonic {
+                dbg!(&self.log_file, &log_ptr);
+                KvStore::value_at_pos(&self.log_file, log_ptr.pos)?
+            } else {
+                let log_file =
+                    KvStore::open_file(&self.path.join(format!("{}.log", log_ptr.file_num)))?;
+                dbg!(&log_file, &log_ptr);
+                KvStore::value_at_pos(&log_file, log_ptr.pos)?
+            };
             let writer = BufWriter::new(&new_log);
+            dbg!(&key, &value);
+            let pos = self.log_file.seek(SeekFrom::End(0))?;
             bincode::serialize_into(
                 writer,
                 &Op::Set {
@@ -132,11 +166,42 @@ impl KvStore {
                     value,
                 },
             )?;
+            log_ptr.file_num = self.monotonic + 1;
+            log_ptr.pos = pos;
         }
-        remove_file(self.path.join(format!("kvs{}.log", self.monotonic)))?;
+        remove_file(self.path.join(format!("{}.log", self.monotonic)))?;
         self.log_file = new_log;
+        self.compactions = 0;
         self.monotonic += 1;
         Ok(())
+    }
+
+    fn sorted_file_nums(path: &PathBuf) -> KvsResult<Vec<u64>> {
+        let mut log_files: Vec<u64> = read_dir(path)?
+            .filter_map(|fp| {
+                if let Ok(fp) = fp {
+                    let file_name = fp.file_name().into_string();
+                    match (fp.path().is_dir(), file_name) {
+                        (true, _) => None,
+                        (false, Ok(n)) if n.ends_with(".log") => KvStore::parse_file_num(&n),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        log_files.sort();
+        Ok(log_files)
+    }
+
+    fn parse_file_num(file_name: &str) -> Option<u64> {
+        file_name
+            .chars()
+            .take_while(|c| c.is_digit(10))
+            .fold("".to_owned(), |acc, c| format!("{}{}", acc, c))
+            .parse::<u64>()
+            .ok()
     }
 
     fn open_file(path: &PathBuf) -> Result<File, std::io::Error> {
@@ -145,7 +210,6 @@ impl KvStore {
             .read(true)
             // Always append the log
             .append(true)
-            // TODO: use `monotonic`
             .open(path.join(path))
     }
 
@@ -164,8 +228,30 @@ impl KvStore {
     }
 }
 
+#[derive(Debug)]
+struct LogPtr {
+    pub file_num: u64,
+    pub pos: u64,
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 enum Op {
     Set { key: String, value: String },
     Rm { key: String },
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parse_good_file_num() {
+        assert_eq!(Some(100_102), KvStore::parse_file_num("100102.log"));
+        assert_eq!(Some(0), KvStore::parse_file_num("0.log"));
+    }
+
+    #[test]
+    fn parse_bad_file_num() {
+        assert_eq!(None, KvStore::parse_file_num("kvs.log"));
+    }
 }
