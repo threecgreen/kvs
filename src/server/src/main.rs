@@ -13,8 +13,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .long("version")
                 .help("Print the version and exit"),
         )
-        .arg(Arg::with_name("address").long("addr").value_name("IP:PORT"))
-        .help("IP address either v4 or v6 and a port. Defaults to localhost:4000")
+        .arg(
+            Arg::with_name("address")
+                .long("addr")
+                .value_name("IP:PORT")
+                .help("IP address either v4 or v6 and a port. Defaults to localhost:4000"),
+        )
         .arg(
             Arg::with_name("engine")
                 .long("engine")
