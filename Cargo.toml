@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Carter Green <cartergr@usc.edu>"]
 edition = "2018"
 description = "A key-value store"
+readme = "./README.md"
 
 [dependencies]
 bincode = "1.2.1"
