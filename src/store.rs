@@ -45,13 +45,16 @@ impl KvStore {
                     if let Ok(op) = bincode::deserialize_from(&log_file) {
                         match op {
                             Op::Set { key, .. } => {
-                                if let Some(_) = index.insert(
-                                    key,
-                                    LogPtr {
-                                        file_num: file_num.to_owned(),
-                                        pos,
-                                    },
-                                ) {
+                                if index
+                                    .insert(
+                                        key,
+                                        LogPtr {
+                                            file_num: file_num.to_owned(),
+                                            pos,
+                                        },
+                                    )
+                                    .is_some()
+                                {
                                     // `key` previously existed in `index`. This is an
                                     // opportunity for compaction
                                     compactions += 1;
@@ -79,12 +82,6 @@ impl KvStore {
     }
 
     pub fn set(&mut self, key: String, value: String) -> KvsResult<()> {
-        // Compaction
-        if self.index.contains_key(&key) {
-            self.compactions += 1;
-            dbg!(&key, &value, &self.compactions);
-            self.compact_maybe()?;
-        }
         // Log
         let op = Op::Set {
             key: key.clone(),
@@ -95,13 +92,21 @@ impl KvStore {
         dbg!(&writer, &op);
         bincode::serialize_into(writer, &op)?;
         // Set
-        self.index.insert(
-            key,
-            LogPtr {
-                file_num: self.monotonic,
-                pos,
-            },
-        );
+        if self
+            .index
+            .insert(
+                key,
+                LogPtr {
+                    file_num: self.monotonic,
+                    pos,
+                },
+            )
+            .is_some()
+        {
+            // Compaction
+            self.compactions += 1;
+            self.compact_maybe()?;
+        }
         Ok(())
     }
 
@@ -117,9 +122,6 @@ impl KvStore {
         if !self.index.contains_key(&key) {
             return Err(KvsError::KeyNotFound { key });
         }
-        // Compaction
-        self.compactions += 1;
-        self.compact_maybe()?;
         // Log
         let op = Op::Rm { key: key.clone() };
         let writer = BufWriter::new(&self.log_file);
@@ -127,6 +129,9 @@ impl KvStore {
         bincode::serialize_into(writer, &op)?;
         // Remove
         self.index.remove(&key);
+        // Compaction
+        self.compactions += 1;
+        self.compact_maybe()?;
         Ok(())
     }
 
@@ -142,7 +147,8 @@ impl KvStore {
     /// `Op::Rm`s and `Op::Set`s that are set again later.
     pub fn compact(&mut self) -> KvsResult<()> {
         dbg!(&self.monotonic);
-        let new_log = KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
+        let mut new_log =
+            KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
         for (key, log_ptr) in &mut self.index {
             dbg!(&key, &log_ptr);
             // Even if we error out writing these, the data will not be
@@ -156,9 +162,9 @@ impl KvStore {
                 dbg!(&log_file, &log_ptr);
                 KvStore::value_at_pos(&log_file, log_ptr.pos)?
             };
+            let pos = new_log.seek(SeekFrom::End(0))?;
             let writer = BufWriter::new(&new_log);
             dbg!(&key, &value);
-            let pos = self.log_file.seek(SeekFrom::End(0))?;
             bincode::serialize_into(
                 writer,
                 &Op::Set {
