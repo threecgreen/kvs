@@ -1,9 +1,22 @@
+#[macro_use]
+extern crate slog;
+
 use kvs::{KvStore, KvsEngine};
 
 use clap::{App, Arg};
+use slog::Drain;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Instantiate log
+    let decorator = slog_term::TermDecorator::new().stderr().build();
+    let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain).build().fuse();
+    let log = slog::Logger::root(drain, o!());
+
+    let version = env!("CARGO_PKG_VERSION");
+    let default_addr = "127.0.0.1:4000";
+
     let args = App::new("kvs-server")
         .author("Carter Green")
         .about("Key-value store server")
@@ -17,7 +30,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             Arg::with_name("address")
                 .long("addr")
                 .value_name("IP:PORT")
-                .help("IP address either v4 or v6 and a port. Defaults to localhost:4000"),
+                .help(&format!(
+                    "IP address either v4 or v6 and a port. Defaults to {}",
+                    default_addr
+                )),
         )
         .arg(
             Arg::with_name("engine")
@@ -27,14 +43,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         )
         .get_matches();
     if args.is_present("version") {
-        println!("kvs-server version {}", env!("CARGO_PKG_VERSION"));
+        println!("kvs-server version {}", version);
     } else {
-        let addr = args.value_of("address").unwrap_or("127.0.0.1:4000");
+        let addr = args.value_of("address").unwrap_or(default_addr);
         let engine: Box<dyn KvsEngine> = match args.value_of("engine") {
             Some("kvs") | None => Ok(Box::new(KvStore::open(std::env::current_dir()?)?)),
             Some("sled") => todo!("Implement sled integration"),
             Some(other) => Err(format!("Invalid engine option {}", other)),
         }?;
+        info!(log, "Starting server"; "engine" => args.value_of("engine"), "version" => version, "address" => addr);
     }
     Ok(())
 }
