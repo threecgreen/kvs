@@ -7,12 +7,11 @@ use std::io::{BufWriter, Seek, SeekFrom};
 use std::path::PathBuf;
 
 /// Key-value store where both key and value are `String`s
+#[derive(Debug)]
 pub struct KvStore {
     path: PathBuf,
     log_file: File,
     /// Store position and file instead of deserialized values to save memory
-    // TODO: Could be an optimization to store values for smaller data and
-    // position for larger.
     index: HashMap<String, LogPtr>,
     /// Number of opportunities for compaction, i.e. places where there are
     /// log entries that could be eliminated
@@ -89,7 +88,6 @@ impl KvStore {
         };
         let pos = self.log_file.seek(SeekFrom::End(0))?;
         let writer = BufWriter::new(&self.log_file);
-        dbg!(&writer, &op);
         bincode::serialize_into(writer, &op)?;
         // Set
         if self
@@ -125,7 +123,6 @@ impl KvStore {
         // Log
         let op = Op::Rm { key: key.clone() };
         let writer = BufWriter::new(&self.log_file);
-        dbg!(&writer, &op);
         bincode::serialize_into(writer, &op)?;
         // Remove
         self.index.remove(&key);
@@ -146,25 +143,20 @@ impl KvStore {
     /// Forces compaction. Rewrites log, eliminating unnecessary logs, i.e.
     /// `Op::Rm`s and `Op::Set`s that are set again later.
     pub fn compact(&mut self) -> KvsResult<()> {
-        dbg!(&self.monotonic);
         let mut new_log =
             KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
         for (key, log_ptr) in &mut self.index {
-            dbg!(&key, &log_ptr);
             // Even if we error out writing these, the data will not be
             // corrupted
             let value = if log_ptr.file_num == self.monotonic {
-                dbg!(&self.log_file, &log_ptr);
                 KvStore::value_at_pos(&self.log_file, log_ptr.pos)?
             } else {
                 let log_file =
                     KvStore::open_file(&self.path.join(format!("{}.log", log_ptr.file_num)))?;
-                dbg!(&log_file, &log_ptr);
                 KvStore::value_at_pos(&log_file, log_ptr.pos)?
             };
             let pos = new_log.seek(SeekFrom::End(0))?;
             let writer = BufWriter::new(&new_log);
-            dbg!(&key, &value);
             bincode::serialize_into(
                 writer,
                 &Op::Set {
