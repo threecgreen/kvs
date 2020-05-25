@@ -6,7 +6,15 @@ use std::fs::{create_dir_all, read_dir, remove_file, File, OpenOptions};
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::path::PathBuf;
 
-/// Key-value store where both key and value are `String`s
+/// Key-value store where both key and value are `String`s. Uses a
+/// write-ahead log (WAL) to safely persist data to the filesystem. This also
+/// allows the database to hold more data than can be stored in memory.
+///
+/// Implements periodic compaction to eliminate duplicate entries and prevent
+/// the write-ahead log from continuously growing. The compaction happens
+/// automatically once the number of opportunities has reached
+/// `COMPACTION_LIMIT`, however it can also be triggered manually by calling
+/// `KvStore::compact()`.
 #[derive(Debug)]
 pub struct KvStore {
     path: PathBuf,
@@ -25,6 +33,8 @@ pub struct KvStore {
 static COMPACTION_LIMIT: u16 = 50;
 
 impl KvStore {
+    /// Open the database at `path`. To create a new database `path` should be
+    /// an empty directory.
     pub fn open(path: impl Into<PathBuf>) -> KvsResult<KvStore> {
         let path = path.into();
         create_dir_all(&path)?;
@@ -80,6 +90,8 @@ impl KvStore {
         })
     }
 
+    /// Set the value of `key` to `value`. Overwrites any existing entry for
+    /// `key`.
     pub fn set(&mut self, key: String, value: String) -> KvsResult<()> {
         // Log
         let op = Op::Set {
@@ -108,6 +120,8 @@ impl KvStore {
         Ok(())
     }
 
+    /// Get the value associated with `key`. Returns `Some(value)` if the entry
+    // exists, otherwise `None`
     pub fn get(&mut self, key: String) -> KvsResult<Option<String>> {
         match self.index.get(&key) {
             Some(log_ptr) => KvStore::value_at_pos(&self.log_file, log_ptr.pos).map(Some),
@@ -115,6 +129,8 @@ impl KvStore {
         }
     }
 
+    /// Remove the entry for `key`. Returns `Err(KvsError::KeyNotFound)` if
+    /// there is no entry for `key`.
     pub fn remove(&mut self, key: String) -> KvsResult<()> {
         // Error checking
         if !self.index.contains_key(&key) {
@@ -141,7 +157,7 @@ impl KvStore {
     }
 
     /// Forces compaction. Rewrites log, eliminating unnecessary logs, i.e.
-    /// `Op::Rm`s and `Op::Set`s that are set again later.
+    /// removals and sets that are overwritten later.
     pub fn compact(&mut self) -> KvsResult<()> {
         let mut new_log =
             KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;

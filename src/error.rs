@@ -2,13 +2,18 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::io;
 
+/// Possible errors that occur when interacting with [KvStore](crate::KvStore).
 #[derive(Debug)]
 pub enum KvsError {
+    /// Tried to remove an entry for a key that doesn't exist
     KeyNotFound { key: String },
+    /// Error related to file IO
     Io { cause: io::Error },
+    /// Error (de)serializing the data in the store
     Serialization { cause: Box<bincode::ErrorKind> },
 }
 
+/// Alias for a `kvs` operation that may fail.
 pub type KvsResult<T> = Result<T, KvsError>;
 
 impl From<Box<bincode::ErrorKind>> for KvsError {
