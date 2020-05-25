@@ -11,6 +11,8 @@ pub enum Error {
     Io { cause: io::Error },
     /// Error (de)serializing the data in the store
     Serialization { cause: Box<bincode::ErrorKind> },
+    /// Server error
+    Server { msg: String },
 }
 
 /// Alias for a `kvs` operation that may fail.
@@ -36,6 +38,7 @@ impl Display for Error {
             Self::KeyNotFound { key } => write!(f, "Key not found: {}", key),
             Self::Io { cause } => write!(f, "Io: {}", cause),
             Self::Serialization { cause } => write!(f, "Serialization: {}", cause),
+            Self::Server { msg } => write!(f, "Server: {}", msg),
         }
     }
 }
@@ -54,6 +57,17 @@ impl StdError for Error {
             Self::Io { cause } => Some(cause),
             Self::Serialization { cause } => Some(cause),
             _ => None,
+        }
+    }
+}
+
+mod slog {
+    use super::Error;
+    use slog::{Key, Record, Result, Serializer, Value};
+
+    impl Value for Error {
+        fn serialize(&self, _rec: &Record, key: Key, serializer: &mut dyn Serializer) -> Result {
+            serializer.emit_str(key, &format!("{:?}", self))
         }
     }
 }

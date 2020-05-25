@@ -386,6 +386,7 @@ dependencies = [
  "bincode",
  "criterion",
  "serde",
+ "slog",
  "tempfile",
  "walkdir",
 ]
@@ -395,6 +396,7 @@ name = "kvs-client"
 version = "0.3.0"
 dependencies = [
  "assert_cmd",
+ "bincode",
  "clap",
  "kvs",
  "predicates",
@@ -407,6 +409,7 @@ name = "kvs-server"
 version = "0.3.0"
 dependencies = [
  "assert_cmd",
+ "bincode",
  "clap",
  "kvs",
  "predicates",

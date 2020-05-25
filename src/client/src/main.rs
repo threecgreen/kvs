@@ -1,4 +1,4 @@
-use kvs::{KvStore, KvsEngine};
+use kvs_client::Client;
 
 use clap::{App, AppSettings, Arg, SubCommand};
 use std::error::Error;
@@ -65,25 +65,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     if args.is_present("version") {
         println!("kvs-client version {}", env!("CARGO_PKG_VERSION"));
     } else {
-        let cwd = std::env::current_dir()?;
-        let mut store = KvStore::open(cwd)?;
+        let default_addr = "127.0.0.1:4000";
+        let mut client = Client::connect(args.value_of("addr").unwrap_or(default_addr))?;
+
         match args.subcommand() {
             ("set", Some(sub)) => {
-                // Safe to unwrap because arguments are required
-                store.set(
+                client.set(
+                    // Safe to unwrap because arguments are required
                     sub.value_of("key").unwrap().to_owned(),
                     sub.value_of("value").unwrap().to_owned(),
                 )?;
             }
             ("get", Some(sub)) => {
-                let value = store.get(sub.value_of("key").unwrap().to_owned())?;
-                match value {
+                let res = client.get(sub.value_of("key").unwrap().to_owned())?;
+                match res {
                     Some(value) => println!("{}", value),
                     None => println!("Key not found"),
                 };
             }
             ("rm", Some(sub)) => {
-                let res = store.remove(sub.value_of("key").unwrap().to_owned());
+                let res = client.remove(sub.value_of("key").unwrap().to_owned());
                 if let Err(kvs::Error::KeyNotFound { .. }) = res {
                     println!("Key not found");
                     std::process::exit(1);

@@ -10,6 +10,7 @@ kvs = { path = "../core" }
 slog = "2.5.2"
 slog-term = "2.5.0"
 slog-async = "2.5.0"
+bincode = "1.2.1"
 
 [dev-dependencies]
 assert_cmd = "0.11"
