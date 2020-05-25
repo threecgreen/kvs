@@ -5,6 +5,7 @@ authors = ["Carter Green <cartergr@usc.edu>"]
 edition = "2018"
 
 [dependencies]
+clap = "2.33"
 kvs = { path = "../core" }
 
 [dev-dependencies]

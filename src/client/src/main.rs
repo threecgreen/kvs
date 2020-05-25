@@ -1,4 +1,4 @@
-use kvs::{KvStore, KvsError};
+use kvs::{KvsEngine, KvStore};
 
 use clap::{App, AppSettings, Arg, SubCommand};
 use std::error::Error;
@@ -6,7 +6,7 @@ use std::error::Error;
 fn main() -> Result<(), Box<dyn Error>> {
     let args = App::new("kvs")
         .author("Carter Green")
-        .about("Key value store")
+        .about("Key-value store client")
         .setting(AppSettings::ArgRequiredElseHelp)
         .arg(
             Arg::with_name("version")
@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             ("rm", Some(sub)) => {
                 let res = store.remove(sub.value_of("KEY").unwrap().to_owned());
-                if let Err(KvsError::KeyNotFound { .. }) = res {
+                if let Err(kvs::Error::KeyNotFound { .. }) = res {
                     println!("Key not found");
                     std::process::exit(1);
                 }

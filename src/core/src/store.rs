@@ -1,4 +1,4 @@
-use crate::{KvsError, KvsResult};
+use crate::{Error, KvsEngine, Result};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -32,10 +32,70 @@ pub struct KvStore {
 /// to find good number
 static COMPACTION_LIMIT: u16 = 50;
 
+impl KvsEngine for KvStore {
+    /// Set the value of `key` to `value`. Overwrites any existing entry for
+    /// `key`.
+    fn set(&mut self, key: String, value: String) -> Result<()> {
+        // Log
+        let op = Op::Set {
+            key: key.clone(),
+            value,
+        };
+        let pos = self.log_file.seek(SeekFrom::End(0))?;
+        let writer = BufWriter::new(&self.log_file);
+        bincode::serialize_into(writer, &op)?;
+        // Set
+        if self
+            .index
+            .insert(
+                key,
+                LogPtr {
+                    file_num: self.monotonic,
+                    pos,
+                },
+            )
+            .is_some()
+        {
+            // Compaction
+            self.compactions += 1;
+            self.compact_maybe()?;
+        }
+        Ok(())
+    }
+
+    /// Get the value associated with `key`. Returns `Some(value)` if the entry
+    // exists, otherwise `None`
+    fn get(&mut self, key: String) -> Result<Option<String>> {
+        match self.index.get(&key) {
+            Some(log_ptr) => KvStore::value_at_pos(&self.log_file, log_ptr.pos).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Remove the entry for `key`. Returns `Err(Error::KeyNotFound)` if
+    /// there is no entry for `key`.
+    fn remove(&mut self, key: String) -> Result<()> {
+        // Error checking
+        if !self.index.contains_key(&key) {
+            return Err(Error::KeyNotFound { key });
+        }
+        // Log
+        let op = Op::Rm { key: key.clone() };
+        let writer = BufWriter::new(&self.log_file);
+        bincode::serialize_into(writer, &op)?;
+        // Remove
+        self.index.remove(&key);
+        // Compaction
+        self.compactions += 1;
+        self.compact_maybe()?;
+        Ok(())
+    }
+}
+
 impl KvStore {
     /// Open the database at `path`. To create a new database `path` should be
     /// an empty directory.
-    pub fn open(path: impl Into<PathBuf>) -> KvsResult<KvStore> {
+    pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
         let path = path.into();
         create_dir_all(&path)?;
         let log_file_nums = KvStore::sorted_file_nums(&path)?;
@@ -90,65 +150,7 @@ impl KvStore {
         })
     }
 
-    /// Set the value of `key` to `value`. Overwrites any existing entry for
-    /// `key`.
-    pub fn set(&mut self, key: String, value: String) -> KvsResult<()> {
-        // Log
-        let op = Op::Set {
-            key: key.clone(),
-            value,
-        };
-        let pos = self.log_file.seek(SeekFrom::End(0))?;
-        let writer = BufWriter::new(&self.log_file);
-        bincode::serialize_into(writer, &op)?;
-        // Set
-        if self
-            .index
-            .insert(
-                key,
-                LogPtr {
-                    file_num: self.monotonic,
-                    pos,
-                },
-            )
-            .is_some()
-        {
-            // Compaction
-            self.compactions += 1;
-            self.compact_maybe()?;
-        }
-        Ok(())
-    }
-
-    /// Get the value associated with `key`. Returns `Some(value)` if the entry
-    // exists, otherwise `None`
-    pub fn get(&mut self, key: String) -> KvsResult<Option<String>> {
-        match self.index.get(&key) {
-            Some(log_ptr) => KvStore::value_at_pos(&self.log_file, log_ptr.pos).map(Some),
-            None => Ok(None),
-        }
-    }
-
-    /// Remove the entry for `key`. Returns `Err(KvsError::KeyNotFound)` if
-    /// there is no entry for `key`.
-    pub fn remove(&mut self, key: String) -> KvsResult<()> {
-        // Error checking
-        if !self.index.contains_key(&key) {
-            return Err(KvsError::KeyNotFound { key });
-        }
-        // Log
-        let op = Op::Rm { key: key.clone() };
-        let writer = BufWriter::new(&self.log_file);
-        bincode::serialize_into(writer, &op)?;
-        // Remove
-        self.index.remove(&key);
-        // Compaction
-        self.compactions += 1;
-        self.compact_maybe()?;
-        Ok(())
-    }
-
-    fn compact_maybe(&mut self) -> KvsResult<()> {
+    fn compact_maybe(&mut self) -> Result<()> {
         if self.compactions >= COMPACTION_LIMIT {
             self.compact()
         } else {
@@ -158,7 +160,7 @@ impl KvStore {
 
     /// Forces compaction. Rewrites log, eliminating unnecessary logs, i.e.
     /// removals and sets that are overwritten later.
-    pub fn compact(&mut self) -> KvsResult<()> {
+    pub fn compact(&mut self) -> Result<()> {
         let mut new_log =
             KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
         for (key, log_ptr) in &mut self.index {
@@ -190,7 +192,7 @@ impl KvStore {
         Ok(())
     }
 
-    fn sorted_file_nums(path: &PathBuf) -> KvsResult<Vec<u64>> {
+    fn sorted_file_nums(path: &PathBuf) -> Result<Vec<u64>> {
         let mut log_files: Vec<u64> = read_dir(path)?
             .filter_map(|fp| {
                 if let Ok(fp) = fp {
@@ -218,7 +220,7 @@ impl KvStore {
             .ok()
     }
 
-    fn open_file(path: &PathBuf) -> Result<File, std::io::Error> {
+    fn open_file(path: &PathBuf) -> std::result::Result<File, std::io::Error> {
         OpenOptions::new()
             .create(true)
             .read(true)
@@ -227,17 +229,17 @@ impl KvStore {
             .open(path.join(path))
     }
 
-    fn current_pos<S: Seek>(reader: &mut S) -> KvsResult<u64> {
+    fn current_pos<S: Seek>(reader: &mut S) -> Result<u64> {
         Ok(reader.seek(SeekFrom::Current(0))?)
     }
 
-    fn value_at_pos<S: Seek + std::io::Read>(mut reader: S, pos: u64) -> KvsResult<String> {
+    fn value_at_pos<S: Seek + std::io::Read>(mut reader: S, pos: u64) -> Result<String> {
         reader.seek(SeekFrom::Start(pos))?;
         match bincode::deserialize_from(reader)? {
             Op::Set { value, .. } => Ok(value),
             // TODO: create error enum for this. If this happens the
             // index is somewhat corrupted and should maybe be rebuilt.
-            Op::Rm { key } => Err(KvsError::KeyNotFound { key }),
+            Op::Rm { key } => Err(Error::KeyNotFound { key }),
         }
     }
 }
