@@ -6,11 +6,13 @@ use kvs::{KvsEngine, Result};
 
 use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
+#[derive(Clone, Copy, Debug)]
 pub enum EngineImpl {
     Kvs,
     Sled,
 }
 
+#[derive(Debug)]
 pub struct KvsServer<E: KvsEngine> {
     engine: E,
     log: slog::Logger,
@@ -63,5 +65,15 @@ impl<E: KvsEngine> KvsServer<E> {
             }
         }?;
         Ok(())
+    }
+}
+
+impl slog::Value for EngineImpl {
+    fn serialize(&self, _rec: &slog::Record, key: slog::Key, serializer: &mut dyn slog::Serializer) -> slog::Result {
+        let s = match self {
+            EngineImpl::Kvs => "KvsStore",
+            EngineImpl::Sled => "SledEngine",
+        };
+        serializer.emit_str(key, &format!("{:?}", s))
     }
 }

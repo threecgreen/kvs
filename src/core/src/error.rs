@@ -71,3 +71,19 @@ mod slog {
         }
     }
 }
+
+#[cfg(feature = "sled_engine")]
+pub mod sled {
+    use super::Error;
+
+    impl From<sled::Error> for Error {
+        fn from(sled_error: sled::Error) -> Self {
+            match sled_error {
+                sled::Error::Io(e) => Error::Io { cause: e },
+                e => Error::Server {
+                    msg: format!("{}", e),
+                },
+            }
+        }
+    }
+}

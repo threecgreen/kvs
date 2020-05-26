@@ -89,6 +89,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     println!("Key not found");
                     std::process::exit(1);
                 }
+                if let Err(kvs::Error::Server { msg }) = res.as_ref() {
+                    if msg.starts_with("Key not found") {
+                        println!("Key not found");
+                        std::process::exit(1);
+                    }
+                }
                 res?;
             }
             _ => panic!("Unexpected subcommand"),

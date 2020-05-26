@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate slog;
 
-use kvs::KvStore;
+use kvs::{KvStore, SledEngine};
 use kvs_server::{EngineImpl, KvsServer};
 
 use clap::{App, Arg};
@@ -52,12 +52,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some("sled") => Ok(EngineImpl::Sled),
             Some(other) => Err(format!("Invalid engine option {}", other)),
         }?;
-        info!(log, "Starting server"; "engine" => args.value_of("engine"), "version" => version, "address" => addr);
+        info!(
+            log, "Starting server";
+            "engine" => engine,
+            "version" => version,
+            "address" => addr
+        );
+        let cwd = std::env::current_dir()?;
         match engine {
-            EngineImpl::Kvs => {
-                KvsServer::new(KvStore::open(std::env::current_dir()?)?, &log).serve(addr)?
-            }
-            EngineImpl::Sled => todo!("Implement sled integration"),
+            EngineImpl::Kvs => KvsServer::new(KvStore::open(cwd)?, &log).serve(addr)?,
+            EngineImpl::Sled => KvsServer::new(SledEngine::open(cwd)?, &log).serve(addr)?,
         };
     }
     Ok(())

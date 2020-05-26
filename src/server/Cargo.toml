@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 clap = "2.33"
-kvs = { path = "../core" }
+kvs = { path = "../core", features = [ "sled_engine" ] }
 slog = "2.5.2"
 slog-term = "2.5.0"
 slog-async = "2.5.0"
