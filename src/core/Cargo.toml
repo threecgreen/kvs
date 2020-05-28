@@ -19,3 +19,8 @@ sled_engine = ["sled"]
 criterion = "0.2.11"
 tempfile = "3.0.7"
 walkdir = "2.2.7"
+rand = { version = "0.7.3", features = ["small_rng"] }
+
+[[bench]]
+name = "benches"
+harness = false # Using criterion
