@@ -1,6 +1,7 @@
 use std::error::Error as StdError;
 use std::fmt::{self, Display};
 use std::io;
+use std::sync;
 
 /// Possible errors that occur when interacting with [KvStore](crate::KvStore).
 #[derive(Debug)]
@@ -13,6 +14,8 @@ pub enum Error {
     Serialization { cause: Box<bincode::ErrorKind> },
     /// Server error
     Server { msg: String },
+    /// Synchronization
+    Synchronization { msg: String }
 }
 
 /// Alias for a `kvs` operation that may fail.
@@ -39,6 +42,7 @@ impl Display for Error {
             Self::Io { cause } => write!(f, "Io: {}", cause),
             Self::Serialization { cause } => write!(f, "Serialization: {}", cause),
             Self::Server { msg } => write!(f, "Server: {}", msg),
+            Self::Synchronization { msg } => write!(f, "Synchronization: {}", msg),
         }
     }
 }
