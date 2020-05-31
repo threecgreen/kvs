@@ -1,7 +1,10 @@
 use crate::pool::ThreadPool;
 
-use kvs::{KvsEngine, Result, protocol::{GetResponse, SetResponse, RemoveResponse, Request}};
-use std::net::{ToSocketAddrs, TcpListener, TcpStream};
+use kvs::{
+    protocol::{GetResponse, RemoveResponse, Request, SetResponse},
+    KvsEngine, Result,
+};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 
 #[derive(Debug)]
 pub struct KvsServer<E: KvsEngine, P: ThreadPool> {
@@ -14,7 +17,6 @@ struct Inner<E: KvsEngine> {
     engine: E,
     log: slog::Logger,
 }
-
 
 impl<E: KvsEngine, P: ThreadPool> KvsServer<E, P> {
     pub fn new(engine: E, log: &slog::Logger, pool: P) -> Self {
@@ -37,7 +39,9 @@ impl<E: KvsEngine, P: ThreadPool> KvsServer<E, P> {
                     let inner = self.inner.clone();
                     self.pool.spawn(move || inner.handle_and_log(stream))
                 }
-                Err(e) => error!(self.inner.log, "Connection failed"; "error" => format!("{:?}", e)),
+                Err(e) => {
+                    error!(self.inner.log, "Connection failed"; "error" => format!("{:?}", e))
+                }
             }
         }
         Ok(())

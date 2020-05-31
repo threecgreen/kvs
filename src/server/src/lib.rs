@@ -6,8 +6,8 @@ use kvs::Result;
 mod pool;
 mod server;
 
-pub use server::KvsServer;
 pub use pool::{NaiveThreadPool, ThreadPool};
+pub use server::KvsServer;
 
 #[derive(Clone, Copy, Debug)]
 pub enum EngineImpl {

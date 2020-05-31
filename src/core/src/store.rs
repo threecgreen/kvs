@@ -51,17 +51,7 @@ impl KvsEngine for KvStore {
         bincode::serialize_into(writer, &op)?;
         // Set
         let file_num = store.monotonic;
-        if store
-            .index
-            .insert(
-                key,
-                LogPtr {
-                    file_num,
-                    pos,
-                },
-            )
-            .is_some()
-        {
+        if store.index.insert(key, LogPtr { file_num, pos }).is_some() {
             // Compaction
             store.compactions += 1;
             store.compact_maybe()?;
