@@ -7,8 +7,7 @@ pub trait ThreadPool: Sized {
         F: FnOnce() + Send + 'static;
 }
 
-pub struct NaiveThreadPool {
-}
+pub struct NaiveThreadPool {}
 
 impl ThreadPool for NaiveThreadPool {
     fn new(threads: u32) -> Result<Self> {
@@ -16,7 +15,9 @@ impl ThreadPool for NaiveThreadPool {
     }
 
     fn spawn<F>(&self, job: F)
-    where F: FnOnce() + Send + 'static {
-        std::thread::spawn(job)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        std::thread::spawn(job);
     }
 }

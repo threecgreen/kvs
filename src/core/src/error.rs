@@ -15,7 +15,7 @@ pub enum Error {
     /// Server error
     Server { msg: String },
     /// Synchronization
-    Synchronization { msg: String }
+    Synchronization { msg: String },
 }
 
 /// Alias for a `kvs` operation that may fail.
@@ -32,6 +32,14 @@ impl From<Box<bincode::ErrorKind>> for Error {
 impl From<io::Error> for Error {
     fn from(io_error: io::Error) -> Self {
         Self::Io { cause: io_error }
+    }
+}
+
+impl<T> From<sync::PoisonError<T>> for Error {
+    fn from(poison_error: sync::PoisonError<T>) -> Self {
+        Self::Synchronization {
+            msg: poison_error.to_string(),
+        }
     }
 }
 

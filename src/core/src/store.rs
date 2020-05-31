@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs::{create_dir_all, read_dir, remove_file, File, OpenOptions};
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock, atomic::{AtomicU16, AtomicU64, Ordering}};
+use std::sync::{Arc, RwLock};
 
 /// Key-value store where both key and value are `String`s. Uses a
 /// write-ahead log (WAL) to safely persist data to the filesystem. This also
@@ -17,16 +17,19 @@ use std::sync::{Arc, RwLock, atomic::{AtomicU16, AtomicU64, Ordering}};
 /// `COMPACTION_LIMIT`, however it can also be triggered manually by calling
 /// `KvStore::compact()`.
 #[derive(Clone, Debug)]
-pub struct KvStore {
-    path: Arc<RwLock<PathBuf>>,
-    log_file: Arc<RwLock<File>>,
+pub struct KvStore(Arc<RwLock<SharedKvStore>>);
+
+#[derive(Debug)]
+struct SharedKvStore {
+    path: PathBuf,
+    log_file: File,
     /// Store position and file instead of deserialized values to save memory
-    index: Arc<RwLock<HashMap<String, LogPtr>>>,
+    index: HashMap<String, LogPtr>,
     /// Number of opportunities for compaction, i.e. places where there are
     /// log entries that could be eliminated
-    compactions: Arc<AtomicU16>,
+    compactions: u16,
     /// max id of current log files
-    monotonic: Arc<AtomicU64>,
+    monotonic: u64,
 }
 
 /// Arbitrary limit before compacting. Could be made configurable or experiment
@@ -37,32 +40,31 @@ impl KvsEngine for KvStore {
     /// Set the value of `key` to `value`. Overwrites any existing entry for
     /// `key`.
     fn set(&self, key: String, value: String) -> Result<()> {
+        let mut store = self.0.write()?;
         // Log
         let op = Op::Set {
             key: key.clone(),
             value,
         };
-        let log_file = self.log_file.write().map_err(|_e| Error::Synchronization{ msg: "Read lock for log_file in set".to_owned() })?;
-        let pos = log_file.seek(SeekFrom::End(0))?;
-        let writer = BufWriter::new(log_file);
+        let pos = store.log_file.seek(SeekFrom::End(0))?;
+        let writer = BufWriter::new(&store.log_file);
         bincode::serialize_into(writer, &op)?;
         // Set
-        if self
+        let file_num = store.monotonic;
+        if store
             .index
-            .write()
-            .map_err(|_e| Error::Synchronization{ msg: "Write lock for index in set".to_owned() })?
             .insert(
                 key,
                 LogPtr {
-                    file_num: self.monotonic.load(Ordering::SeqCst),
+                    file_num,
                     pos,
                 },
             )
             .is_some()
         {
             // Compaction
-            self.compactions.fetch_add(1, Ordering::SeqCst);
-            self.compact_maybe()?;
+            store.compactions += 1;
+            store.compact_maybe()?;
         }
         Ok(())
     }
@@ -70,8 +72,9 @@ impl KvsEngine for KvStore {
     /// Get the value associated with `key`. Returns `Some(value)` if the entry
     // exists, otherwise `None`
     fn get(&self, key: String) -> Result<Option<String>> {
-        match self.index.read().map_err(|_e| Error::Synchronization{ msg: "Read lock for index in get".to_owned() })?.get(&key) {
-            Some(log_ptr) => KvStore::value_at_pos(&self.log_file, log_ptr.pos).map(Some),
+        let store = self.0.read()?;
+        match store.index.get(&key) {
+            Some(log_ptr) => SharedKvStore::value_at_pos(&store.log_file, log_ptr.pos).map(Some),
             None => Ok(None),
         }
     }
@@ -79,19 +82,20 @@ impl KvsEngine for KvStore {
     /// Remove the entry for `key`. Returns `Err(Error::KeyNotFound)` if
     /// there is no entry for `key`.
     fn remove(&self, key: String) -> Result<()> {
+        let mut store = self.0.write()?;
         // Error checking
-        if !self.index.read().map_err(|_e| Error::Synchronization{ msg: "Failed to acquire read lock on index in remove".to_owned() })?.contains_key(&key) {
+        if !store.index.contains_key(&key) {
             return Err(Error::KeyNotFound { key });
         }
         // Log
         let op = Op::Rm { key: key.clone() };
-        let writer = BufWriter::new(&self.log_file.read().map_err(|_e| Error::Synchronization{ msg: "Failed to acquire read lock on log_file in remove".to_owned() })?);.
+        let writer = BufWriter::new(&store.log_file);
         bincode::serialize_into(writer, &op)?;
         // Remove
-        self.index.remove(&key);
+        store.index.remove(&key);
         // Compaction
-        self.compactions.fetch_add(1, Ordering::SeqCst);
-        self.compact_maybe()?;
+        store.compactions += 1;
+        store.compact_maybe()?;
         Ok(())
     }
 }
@@ -102,7 +106,7 @@ impl KvStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<KvStore> {
         let path = path.into();
         create_dir_all(&path)?;
-        let log_file_nums = KvStore::sorted_file_nums(&path)?;
+        let log_file_nums = SharedKvStore::sorted_file_nums(&path)?;
 
         // Build index
         let mut index = HashMap::new();
@@ -112,9 +116,10 @@ impl KvStore {
         } else {
             // `fold` files together
             for file_num in &log_file_nums {
-                let mut log_file = KvStore::open_file(&path.join(format!("{}.log", file_num)))?;
+                let mut log_file =
+                    SharedKvStore::open_file(&path.join(format!("{}.log", file_num)))?;
                 loop {
-                    let pos = KvStore::current_pos(&mut log_file)?;
+                    let pos = SharedKvStore::current_pos(&mut log_file)?;
                     if let Ok(op) = bincode::deserialize_from(&log_file) {
                         match op {
                             Op::Set { key, .. } => {
@@ -145,37 +150,39 @@ impl KvStore {
             }
             log_file_nums.last().unwrap().to_owned()
         };
-        Ok(KvStore {
-            log_file: Arc::new(RwLock::new(KvStore::open_file(&path.join(format!("{}.log", monotonic)))?)),
-            path: Arc::new(RwLock::new(path)),
-            index: Arc::new(RwLock::new(index)),
-            compactions: Arc::new(AtomicU16::new(compactions)),
-            monotonic: Arc::new(AtomicU64::new(monotonic)),
-        })
+        Ok(KvStore(Arc::new(RwLock::new(SharedKvStore {
+            log_file: SharedKvStore::open_file(&path.join(format!("{}.log", monotonic)))?,
+            path,
+            index,
+            compactions,
+            monotonic,
+        }))))
     }
+}
 
+impl SharedKvStore {
     fn compact_maybe(&mut self) -> Result<()> {
-        if self.compactions.load(Ordering::SeqCst) >= COMPACTION_LIMIT {
+        if self.compactions >= COMPACTION_LIMIT {
             self.compact()
         } else {
             Ok(())
         }
     }
 
-    /// Forces compaction. Rewrites log, eliminating unnecessary logs, i.e.
-    /// removals and sets that are overwritten later.
-    pub fn compact(&self) -> Result<()> {
+    /// Rewrites log, eliminating unnecessary logs, i.e. removals and sets that are overwritten
+    /// later.
+    fn compact(&mut self) -> Result<()> {
         let mut new_log =
-            KvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
+            SharedKvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
         for (key, log_ptr) in &mut self.index {
             // Even if we error out writing these, the data will not be
             // corrupted
             let value = if log_ptr.file_num == self.monotonic {
-                KvStore::value_at_pos(&self.log_file, log_ptr.pos)?
+                SharedKvStore::value_at_pos(&self.log_file, log_ptr.pos)?
             } else {
                 let log_file =
-                    KvStore::open_file(&self.path.join(format!("{}.log", log_ptr.file_num)))?;
-                KvStore::value_at_pos(&log_file, log_ptr.pos)?
+                    SharedKvStore::open_file(&self.path.join(format!("{}.log", log_ptr.file_num)))?;
+                SharedKvStore::value_at_pos(&log_file, log_ptr.pos)?
             };
             let pos = new_log.seek(SeekFrom::End(0))?;
             let writer = BufWriter::new(&new_log);
@@ -203,7 +210,7 @@ impl KvStore {
                     let file_name = fp.file_name().into_string();
                     match (fp.path().is_dir(), file_name) {
                         (true, _) => None,
-                        (false, Ok(n)) if n.ends_with(".log") => KvStore::parse_file_num(&n),
+                        (false, Ok(n)) if n.ends_with(".log") => SharedKvStore::parse_file_num(&n),
                         _ => None,
                     }
                 } else {
@@ -266,12 +273,12 @@ mod test {
 
     #[test]
     fn parse_good_file_num() {
-        assert_eq!(Some(100_102), KvStore::parse_file_num("100102.log"));
-        assert_eq!(Some(0), KvStore::parse_file_num("0.log"));
+        assert_eq!(Some(100_102), SharedKvStore::parse_file_num("100102.log"));
+        assert_eq!(Some(0), SharedKvStore::parse_file_num("0.log"));
     }
 
     #[test]
     fn parse_bad_file_num() {
-        assert_eq!(None, KvStore::parse_file_num("kvs.log"));
+        assert_eq!(None, SharedKvStore::parse_file_num("kvs.log"));
     }
 }
