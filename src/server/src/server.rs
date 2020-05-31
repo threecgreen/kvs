@@ -1,19 +1,30 @@
-use kvs::{KvsEngine, Result, protocol::{GetResponse, SetResponse, RemoveResponse, Request}};
+use crate::pool::ThreadPool;
 
+use kvs::{KvsEngine, Result, protocol::{GetResponse, SetResponse, RemoveResponse, Request}};
 use std::net::{ToSocketAddrs, TcpListener, TcpStream};
 
 #[derive(Debug)]
-pub struct KvsServer<E: KvsEngine> {
+pub struct KvsServer<E: KvsEngine, P: ThreadPool> {
+    inner: Inner<E>,
+    pool: P,
+}
+
+#[derive(Clone, Debug)]
+struct Inner<E: KvsEngine> {
     engine: E,
     log: slog::Logger,
 }
 
-impl<E: KvsEngine> KvsServer<E> {
-    pub fn new(engine: E, log: &slog::Logger) -> Self {
+
+impl<E: KvsEngine, P: ThreadPool> KvsServer<E, P> {
+    pub fn new(engine: E, log: &slog::Logger, pool: P) -> Self {
         Self {
-            engine,
-            // TODO: add context here
-            log: log.new(o!()),
+            inner: Inner {
+                engine,
+                // TODO: add context here
+                log: log.new(o!()),
+            },
+            pool,
         }
     }
 
@@ -23,17 +34,24 @@ impl<E: KvsEngine> KvsServer<E> {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
-                    if let Err(e) = self.handle_stream(stream) {
-                        error!(self.log, "Failed handling stream"; "error" => e);
-                    }
+                    let inner = self.inner.clone();
+                    self.pool.spawn(move || inner.handle_and_log(stream))
                 }
-                Err(e) => error!(self.log, "Connection failed"; "error" => format!("{:?}", e)),
+                Err(e) => error!(self.inner.log, "Connection failed"; "error" => format!("{:?}", e)),
             }
         }
         Ok(())
     }
+}
 
-    fn handle_stream(&mut self, stream: TcpStream) -> Result<()> {
+impl<E: KvsEngine> Inner<E> {
+    fn handle_and_log(&self, stream: TcpStream) {
+        if let Err(e) = self.handle_stream(stream) {
+            error!(self.log, "Failed handling stream"; "error" => e);
+        }
+    }
+
+    fn handle_stream(&self, stream: TcpStream) -> Result<()> {
         let timeout: std::time::Duration = std::time::Duration::new(30, 0);
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;

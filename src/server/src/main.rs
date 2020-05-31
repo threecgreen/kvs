@@ -2,7 +2,7 @@
 extern crate slog;
 
 use kvs::{KvStore, SledEngine};
-use kvs_server::{EngineImpl, KvsServer};
+use kvs_server::{EngineImpl, KvsServer, NaiveThreadPool, ThreadPool};
 
 use clap::{App, Arg};
 use slog::Drain;
@@ -59,9 +59,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "address" => addr
         );
         let cwd = std::env::current_dir()?;
+        let pool = NaiveThreadPool::new(8)?;
         match engine {
-            EngineImpl::Kvs => KvsServer::new(KvStore::open(cwd)?, &log).serve(addr)?,
-            EngineImpl::Sled => KvsServer::new(SledEngine::open(cwd)?, &log).serve(addr)?,
+            EngineImpl::Kvs => KvsServer::new(KvStore::open(cwd)?, &log, pool).serve(addr)?,
+            EngineImpl::Sled => KvsServer::new(SledEngine::open(cwd)?, &log, pool).serve(addr)?,
         };
     }
     Ok(())
