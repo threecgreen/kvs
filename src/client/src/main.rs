@@ -66,10 +66,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("kvs-client version {}", env!("CARGO_PKG_VERSION"));
     } else {
         let default_addr = "127.0.0.1:4000";
-        let mut client = Client::connect(args.value_of("addr").unwrap_or(default_addr))?;
 
         match args.subcommand() {
             ("set", Some(sub)) => {
+                let mut client = Client::connect(sub.value_of("address").unwrap_or(default_addr))?;
                 client.set(
                     // Safe to unwrap because arguments are required
                     sub.value_of("key").unwrap().to_owned(),
@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )?;
             }
             ("get", Some(sub)) => {
+                let mut client = Client::connect(sub.value_of("address").unwrap_or(default_addr))?;
                 let res = client.get(sub.value_of("key").unwrap().to_owned())?;
                 match res {
                     Some(value) => println!("{}", value),
@@ -84,6 +85,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
             }
             ("rm", Some(sub)) => {
+                let mut client = Client::connect(sub.value_of("address").unwrap_or(default_addr))?;
                 let res = client.remove(sub.value_of("key").unwrap().to_owned());
                 if let Err(kvs::Error::KeyNotFound { .. }) = res {
                     println!("Key not found");
