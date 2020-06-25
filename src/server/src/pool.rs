@@ -29,6 +29,7 @@ impl ThreadPool for NaiveThreadPool {
 pub struct SharedQueueThreadPool {
     queue: Arc<SegQueue<Message>>,
     handles: Vec<JoinHandle<()>>,
+    // TODO: add logging
 }
 
 enum Message {

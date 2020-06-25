@@ -9,4 +9,4 @@ mod store;
 pub use crate::sled::SledEngine;
 pub use engine::KvsEngine;
 pub use error::*;
-pub use store::KvStore;
+pub use store::{KvStore, LOG_EXT};

@@ -19,6 +19,9 @@ use std::sync::{Arc, RwLock};
 #[derive(Clone, Debug)]
 pub struct KvStore(Arc<RwLock<SharedKvStore>>);
 
+/// File extension for KvStore write-ahead log files
+pub const LOG_EXT: &str = "kvlog";
+
 #[derive(Debug)]
 struct SharedKvStore {
     path: PathBuf,
@@ -107,7 +110,7 @@ impl KvStore {
             // `fold` files together
             for file_num in &log_file_nums {
                 let mut log_file =
-                    SharedKvStore::open_file(&path.join(format!("{}.log", file_num)))?;
+                    SharedKvStore::open_file(&path.join(format!("{}.{}", file_num, LOG_EXT)))?;
                 loop {
                     let pos = SharedKvStore::current_pos(&mut log_file)?;
                     if let Ok(op) = bincode::deserialize_from(&log_file) {
@@ -141,7 +144,7 @@ impl KvStore {
             log_file_nums.last().unwrap().to_owned()
         };
         Ok(KvStore(Arc::new(RwLock::new(SharedKvStore {
-            log_file: SharedKvStore::open_file(&path.join(format!("{}.log", monotonic)))?,
+            log_file: SharedKvStore::open_file(&path.join(format!("{}.{}", monotonic, LOG_EXT)))?,
             path,
             index,
             compactions,
@@ -162,16 +165,20 @@ impl SharedKvStore {
     /// Rewrites log, eliminating unnecessary logs, i.e. removals and sets that are overwritten
     /// later.
     fn compact(&mut self) -> Result<()> {
-        let mut new_log =
-            SharedKvStore::open_file(&self.path.join(format!("{}.log", self.monotonic + 1)))?;
+        let mut new_log = SharedKvStore::open_file(&self.path.join(format!(
+            "{}.{}",
+            self.monotonic + 1,
+            LOG_EXT
+        )))?;
         for (key, log_ptr) in &mut self.index {
             // Even if we error out writing these, the data will not be
             // corrupted
             let value = if log_ptr.file_num == self.monotonic {
                 SharedKvStore::value_at_pos(&self.log_file, log_ptr.pos)?
             } else {
-                let log_file =
-                    SharedKvStore::open_file(&self.path.join(format!("{}.log", log_ptr.file_num)))?;
+                let log_file = SharedKvStore::open_file(
+                    &self.path.join(format!("{}.{}", log_ptr.file_num, LOG_EXT)),
+                )?;
                 SharedKvStore::value_at_pos(&log_file, log_ptr.pos)?
             };
             let pos = new_log.seek(SeekFrom::End(0))?;
@@ -186,7 +193,7 @@ impl SharedKvStore {
             log_ptr.file_num = self.monotonic + 1;
             log_ptr.pos = pos;
         }
-        remove_file(self.path.join(format!("{}.log", self.monotonic)))?;
+        remove_file(self.path.join(format!("{}.{}", self.monotonic, LOG_EXT)))?;
         self.log_file = new_log;
         self.compactions = 0;
         self.monotonic += 1;
@@ -200,7 +207,9 @@ impl SharedKvStore {
                     let file_name = fp.file_name().into_string();
                     match (fp.path().is_dir(), file_name) {
                         (true, _) => None,
-                        (false, Ok(n)) if n.ends_with(".log") => SharedKvStore::parse_file_num(&n),
+                        (false, Ok(n)) if n.ends_with(&format!(".{}", LOG_EXT)) => {
+                            SharedKvStore::parse_file_num(&n)
+                        }
                         _ => None,
                     }
                 } else {
@@ -263,12 +272,12 @@ mod test {
 
     #[test]
     fn parse_good_file_num() {
-        assert_eq!(Some(100_102), SharedKvStore::parse_file_num("100102.log"));
-        assert_eq!(Some(0), SharedKvStore::parse_file_num("0.log"));
+        assert_eq!(Some(100_102), SharedKvStore::parse_file_num("100102.kvlog"));
+        assert_eq!(Some(0), SharedKvStore::parse_file_num("0.kvlog"));
     }
 
     #[test]
     fn parse_bad_file_num() {
-        assert_eq!(None, SharedKvStore::parse_file_num("kvs.log"));
+        assert_eq!(None, SharedKvStore::parse_file_num("kvs.kvlog"));
     }
 }

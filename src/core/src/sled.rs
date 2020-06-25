@@ -1,5 +1,7 @@
+use crate::store::LOG_EXT;
 use crate::{Error, KvsEngine, Result};
 
+use std::fs::read_dir;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -37,6 +39,22 @@ impl KvsEngine for SledEngine {
 impl SledEngine {
     pub fn open(path: impl Into<PathBuf>) -> Result<SledEngine> {
         let path = path.into();
+        // Check if dir contains kvs log files
+        let contains_kvs_files = read_dir(&path)?.any(|dir_entry| {
+            if let Ok(dir_entry) = dir_entry {
+                !dir_entry.path().is_dir() && dir_entry.path().ends_with(&format!(".{}", LOG_EXT))
+            } else {
+                false
+            }
+        });
+        if contains_kvs_files {
+            return Err(Error::Io {
+                cause: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "path contains data for a different database engine",
+                ),
+            });
+        }
         Ok(Self {
             db: sled::open(path)?,
         })

@@ -23,8 +23,8 @@ impl slog::Value for EngineImpl {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         let s = match self {
-            EngineImpl::Kvs => "KvsStore",
-            EngineImpl::Sled => "SledEngine",
+            EngineImpl::Kvs => "kvs",
+            EngineImpl::Sled => "sled",
         };
         serializer.emit_str(key, &format!("{:?}", s))
     }
