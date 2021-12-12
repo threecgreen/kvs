@@ -40,14 +40,13 @@ enum Message {
 impl ThreadPool for SharedQueueThreadPool {
     fn new(threads: u32) -> Result<Self> {
         let queue = Arc::new(SegQueue::new());
-        let mut handles = Vec::new();
-        handles.reserve(threads as usize);
-        for _i in 0..threads {
-            let queue = queue.clone();
-            handles.push(thread::spawn(move || {
-                SharedQueueThreadPool::handle_jobs(queue)
-            }));
-        }
+        let handles: Vec<_> = (0..threads)
+            .into_iter()
+            .map(|_| {
+                let queue = queue.clone();
+                thread::spawn(move || SharedQueueThreadPool::handle_jobs(queue))
+            })
+            .collect();
         Ok(Self { queue, handles })
     }
 
